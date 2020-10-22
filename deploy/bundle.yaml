@@ -1,0 +1,79 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: yunjiasu-secret
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "update","create","delete","list"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: yunjiasu-secret
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: yunjiasu-secret
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: yunjiasu-secret
+subjects:
+  - kind: ServiceAccount
+    name: yunjiasu-secret
+    namespace: default
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: yunjiasu-sync
+  namespace: default
+data:
+  config.yaml: |-
+    certs:
+      - domain: astat.cn # your domain name
+        tlsName: star-astat-cn # your k8s secret name
+        tlsNamespace: default
+        syncToNamespaces: [] # sync this cert to other namespace secret
+        checkInterval: 3600 # seconds
+    common:
+      baseURL: 'https://api.su.baidu.com/'
+      signatureMethod: HMAC-SHA1
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: yunjiasu-sync
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: yunjiasu-sync
+  template:
+    metadata:
+      labels:
+        app: yunjiasu-sync
+    spec:
+      volumes:
+        - name: config
+          configMap:
+            name: yunjiasu-sync
+            defaultMode: 420
+      containers:
+        - name: yunjiasu
+          image: 'ccr.ccs.tencentyun.com/astatium.com/yunjiasu:v1.0.0'
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+      serviceAccountName: yunjiasu-secret
+      serviceAccount: yunjiasu-secret
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
