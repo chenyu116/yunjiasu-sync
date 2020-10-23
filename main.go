@@ -16,4 +16,6 @@ func main() {
 	fmt.Printf("Version: %s, Branch: %s, Build: %s, Build time: %s\n",
 		_version_, _branch_, _commitId_, _buildTime_)
 	yunjiasu.Run()
+	go yunjiasu.RefreshConfig()
+	select {}
 }

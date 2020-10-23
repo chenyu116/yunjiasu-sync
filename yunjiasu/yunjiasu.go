@@ -5,13 +5,17 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"github.com/chenyu116/yunjiasu-sync/config"
 	"github.com/chenyu116/yunjiasu-sync/logger"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"io/ioutil"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"net/http"
@@ -25,6 +29,7 @@ import (
 var (
 	accessKey string
 	secretKey string
+	secrets   map[string]*Secret
 )
 
 func init() {
@@ -36,6 +41,7 @@ func init() {
 	if secretKey == "" {
 		logger.Zap.Fatal("need ENV SECRET_KEY")
 	}
+	secrets = make(map[string]*Secret)
 }
 
 // 签名算法
@@ -67,7 +73,7 @@ type yunjiasuResponse struct {
 	Errors  []yunjiasuError `json:"errors,omitempty"`
 }
 
-func Run() {
+func RefreshConfig() {
 	k8sConfig, err := rest.InClusterConfig()
 	if err != nil {
 		logger.Zap.Fatal(err.Error())
@@ -77,23 +83,89 @@ func Run() {
 		logger.Zap.Fatal(err.Error())
 	}
 	cf := config.GetConfig()
+	timer := time.NewTimer(cf.Common.RefreshInterval * time.Second)
+	buf := new(bytes.Buffer)
+	for {
+		select {
+		case <-timer.C:
+			logger.Zap.Info("[RefreshConfig] Start")
+			configMap, err := clientSet.CoreV1().ConfigMaps("default").Get(context.Background(), "yunjiasu-sync", metav1.GetOptions{})
+			if err != nil {
+				logger.Zap.Error("[RefreshConfig]", zap.Error(err))
+				timer.Reset(cf.Common.RefreshInterval * time.Second)
+				continue
+			}
+			if _ , ok:=configMap.Data["config.yaml"];!ok{
+				logger.Zap.Error("[RefreshConfig]", zap.Strings("configMap", []string{"config.yaml", "not found"}))
+				timer.Reset(cf.Common.RefreshInterval * time.Second)
+				continue
+			}
+			buf.WriteString(configMap.Data["config.yaml"])
+			if buf.Len() == 0 {
+				logger.Zap.Error("[RefreshConfig]", zap.Strings("configMap", []string{"config.yaml", "is empty"}))
+				timer.Reset(cf.Common.RefreshInterval * time.Second)
+				continue
+			}
+			err = config.ReadFromReader(buf)
+			buf.Reset()
+			if err != nil {
+				logger.Zap.Error("[RefreshConfig] update config", zap.Error(err))
+				timer.Reset(cf.Common.RefreshInterval * time.Second)
+				continue
+			}
+			cf = config.GetConfig()
+			Run()
+			logger.Zap.Info("[RefreshConfig] OK", zap.String("next refresh after", fmt.Sprintf("%+v", cf.Common.RefreshInterval*time.Second)))
+			timer.Reset(cf.Common.RefreshInterval * time.Second)
+		}
+	}
+}
+
+func Run() {
+	k8sConfig, err := rest.InClusterConfig()
+	if err != nil {
+		logger.Zap.Fatal(err.Error())
+	}
+	clientSet, err := kubernetes.NewForConfig(k8sConfig)
+	if err != nil {
+		logger.Zap.Fatal(err.Error())
+	}
+
+	cf := config.GetConfig()
+	tempTlsMap := make(map[string]struct{})
 	for _, v := range cf.Certs {
+		tempTlsMap[v.TlsName] = struct{}{}
+		if st, ok := secrets[v.TlsName]; ok {
+			st.StartSync()
+			st.SetCheckInterval(v.CheckInterval * time.Second)
+			st.SetSyncNamespaces(v.SyncToNamespaces)
+			st.StopSync()
+			continue
+		}
 		s := &Secret{
 			TlsName:          v.TlsName,
 			TlsNamespace:     v.TlsNamespace,
 			Domain:           v.Domain,
 			SyncNamespaces:   v.SyncToNamespaces,
 			SyncedNamespaces: make(map[string]struct{}),
-			Timer:            time.NewTimer(0),
+			Timer:            time.NewTimer(5 * time.Second),
 			CheckInterval:    v.CheckInterval * time.Second,
 			deployStatus:     deployPending,
+			syncStatus:       syncPending,
 			Cert:             new(bytes.Buffer),
 			Key:              new(bytes.Buffer),
 			k8sClientset:     clientSet,
+			liveChan:         make(chan struct{}),
 		}
+		secrets[v.TlsName] = s
 		go s.Sync()
 	}
-	select {}
+	for tlsName, s := range secrets {
+		if _, ok := tempTlsMap[tlsName]; !ok {
+			s.Stop()
+			delete(secrets, tlsName)
+		}
+	}
 }
 
 func getInitedCommonParamsMap(authPathInfo string) map[string]string {
@@ -176,8 +248,16 @@ func request(method string, path string, bizParamsMap map[string]string,
 	for k, v := range headers {
 		req.Header.Add(k, v)
 	}
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 
-	res, _ := http.DefaultClient.Do(req)
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
 
 	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)

@@ -2,6 +2,7 @@ package config
 
 import (
 	"github.com/spf13/viper"
+	"io"
 	"log"
 	"time"
 )
@@ -58,8 +59,7 @@ func Set(key string, value interface{}) {
 type CommonConfig struct {
 	BaseURL         string        `mapstructure:"baseURL"`
 	SignatureMethod string        `mapstructure:"signatureMethod"`
-	CheckInterval   time.Duration `mapstructure:"checkInterval"`
-	SyncRetryTimes  int           `mapstructure:"syncRetryTimes"`
+	RefreshInterval time.Duration `mapstructure:"refreshInterval"`
 }
 
 type CertConfig struct {
@@ -82,6 +82,20 @@ type Config struct {
 	Certs  []CertConfig `mapstructure:"certs"`
 	Log    LogConfig    `mapstructure:"log"`
 	Common CommonConfig `mapstructure:"common"`
+}
+
+func ReadFromReader(reader io.Reader) error {
+	err := viper.ReadConfig(reader)
+	if err != nil {
+		return err
+	}
+	c = Config{}
+
+	err = viper.Unmarshal(&c)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func SetConfigPath(path string) {

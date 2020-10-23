@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,13 +46,51 @@ type Secret struct {
 	k8sClientset     *kubernetes.Clientset
 	deployStatus     int
 	syncStatus       int
+	syncWg           sync.WaitGroup
+	liveChan         chan struct{}
 }
 
 func isNotFound(err error) bool {
 	return strings.Index(err.Error(), "not found") > -1
 }
 
+func (s *Secret) IsStopped() bool {
+	select {
+	case <-s.liveChan:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Secret) Stop() {
+	close(s.liveChan)
+}
+func (s *Secret) StartSync() {
+	s.syncWg.Add(1)
+}
+
+func (s *Secret) StopSync() {
+	s.syncWg.Done()
+}
+
+func (s *Secret) Wait() {
+	s.syncWg.Wait()
+}
+
+func (s *Secret) SetSyncNamespaces(ns []string) {
+	s.SyncNamespaces = ns
+}
+
+func (s *Secret) SetCheckInterval(i time.Duration) {
+	s.CheckInterval = i
+}
+
 func (s *Secret) syncNamespaces() error {
+	s.Wait()
+	if s.IsStopped() {
+		return nil
+	}
 	for _, ns := range s.SyncNamespaces {
 		if ns == s.TlsNamespace {
 			continue
@@ -123,6 +162,9 @@ func (s *Secret) syncNamespaces() error {
 }
 
 func (s *Secret) syncYunjiasu() (redeploy bool, err error) {
+	if s.IsStopped() {
+		return false, nil
+	}
 	paramMap := map[string]string{
 		"domain": s.Domain,
 	}
@@ -138,7 +180,7 @@ func (s *Secret) syncYunjiasu() (redeploy bool, err error) {
 	var resp yunjiasuResponse
 	err = json.Unmarshal(body, &resp)
 	if err != nil {
-		logger.Zap.Error("[syncYunjiasu] request", zap.String("domain", s.Domain), zap.Error(err))
+		logger.Zap.Error("[syncYunjiasu] request", zap.String("domain", s.Domain), zap.ByteString("body", body), zap.Error(err))
 		return false, err
 	}
 
@@ -172,6 +214,10 @@ func (s *Secret) syncYunjiasu() (redeploy bool, err error) {
 }
 
 func (s *Secret) readFromK8s() error {
+	s.Wait()
+	if s.IsStopped() {
+		return nil
+	}
 	secret, err := s.k8sClientset.CoreV1().Secrets(s.TlsNamespace).Get(context.Background(), s.TlsName, metav1.GetOptions{})
 	if err != nil {
 		logger.Zap.Error("[readCert]", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}), zap.Error(err))
@@ -194,6 +240,9 @@ func (s *Secret) readFromK8s() error {
 }
 
 func (s *Secret) deploy() (err error) {
+	if s.IsStopped() {
+		return nil
+	}
 	if s.deployStatus < deployUploaded {
 		err = uploadYunjiasuCert(s)
 		if err != nil {
@@ -247,6 +296,10 @@ func (s *Secret) Sync() {
 	retryAfterString := fmt.Sprintf("%+v", retryAfter)
 	for {
 		select {
+		case <-s.liveChan:
+			logger.Zap.Info("[Sync] Stop", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}))
+			s.Timer.Stop()
+			return
 		case <-s.Timer.C:
 			logger.Zap.Info("[Sync] Start", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}))
 			if s.syncStatus < syncReadK8s {
