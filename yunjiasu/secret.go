@@ -7,6 +7,10 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/chenyu116/yunjiasu-sync/logger"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -14,9 +18,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"strings"
-	"sync"
-	"time"
 )
 
 const (
@@ -265,18 +266,20 @@ func (s *Secret) deploy() (err error) {
 		err = deleteYunjiasuCert(s.Domain, s.TlsName)
 		if err != nil {
 			logger.Zap.Error("[deploy] deleteYunjiasuCert", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}), zap.Error(err))
-			return
+			err = nil
+		} else {
+			logger.Zap.Info("[deploy] deleteYunjiasuCert OK", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}))
 		}
-		logger.Zap.Info("[deploy] deleteYunjiasuCert OK", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}))
 		s.deployStatus = deployDeployed
 	}
 	if s.deployStatus < deployRenamed {
 		err = renameYunjiasuCert(s.Domain, s.TlsName)
 		if err != nil {
 			logger.Zap.Error("[deploy] renameYunjiasuCert", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}), zap.Error(err))
-			return
+			err = nil
+		} else {
+			logger.Zap.Info("[deploy] renameYunjiasuCert OK", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}))
 		}
-		logger.Zap.Info("[deploy] renameYunjiasuCert OK", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}))
 		s.deployStatus = deployRenamed
 	}
 	return nil
