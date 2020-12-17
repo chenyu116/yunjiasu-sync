@@ -270,7 +270,7 @@ func (s *Secret) deploy() (err error) {
 		} else {
 			logger.Zap.Info("[deploy] deleteYunjiasuCert OK", zap.Strings("secret", []string{s.TlsName, s.TlsNamespace, s.Domain}))
 		}
-		s.deployStatus = deployDeployed
+		s.deployStatus = deployDeleted
 	}
 	if s.deployStatus < deployRenamed {
 		err = renameYunjiasuCert(s.Domain, s.TlsName)

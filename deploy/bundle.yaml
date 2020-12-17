@@ -5,8 +5,8 @@ metadata:
   name: yunjiasu-secret
 rules:
   - apiGroups: [""]
-    resources: ["secrets","configmaps"]
-    verbs: ["get", "update","create","delete","list"]
+    resources: ["secrets","configmaps","nodes"]
+    verbs: ["get", "update","create","delete","list","patch"]
 ---
 apiVersion: v1
 kind: ServiceAccount

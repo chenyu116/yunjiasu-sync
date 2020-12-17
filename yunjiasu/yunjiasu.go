@@ -95,7 +95,7 @@ func RefreshConfig() {
 				timer.Reset(cf.Common.RefreshInterval * time.Second)
 				continue
 			}
-			if _ , ok:=configMap.Data["config.yaml"];!ok{
+			if _, ok := configMap.Data["config.yaml"]; !ok {
 				logger.Zap.Error("[RefreshConfig]", zap.Strings("configMap", []string{"config.yaml", "not found"}))
 				timer.Reset(cf.Common.RefreshInterval * time.Second)
 				continue
@@ -159,12 +159,6 @@ func Run() {
 		}
 		secrets[v.TlsName] = s
 		go s.Sync()
-	}
-	for tlsName, s := range secrets {
-		if _, ok := tempTlsMap[tlsName]; !ok {
-			s.Stop()
-			delete(secrets, tlsName)
-		}
 	}
 }
 
